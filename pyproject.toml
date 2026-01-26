@@ -39,10 +39,10 @@ dev = [
 twodo-mcp = "twodo_mcp.server:main"
 
 [project.urls]
-Homepage = "https://github.com/carles/twodo-mcp"
-Documentation = "https://github.com/carles/twodo-mcp#readme"
-Repository = "https://github.com/carles/twodo-mcp"
-Issues = "https://github.com/carles/twodo-mcp/issues"
+Homepage = "https://github.com/ardiv/2do-mcp"
+Documentation = "https://github.com/ardiv/2do-mcp#readme"
+Repository = "https://github.com/ardiv/2do-mcp"
+Issues = "https://github.com/ardiv/2do-mcp/issues"
 
 [build-system]
 requires = ["hatchling"]
