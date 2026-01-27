@@ -21,7 +21,7 @@ import json
 import subprocess
 import time
 from enum import Enum
-from typing import Optional, List, Tuple
+from typing import Optional
 from urllib.parse import quote
 
 from pydantic import BaseModel, Field, field_validator, ConfigDict
@@ -62,7 +62,7 @@ class RepeatInterval(str, Enum):
 # URL SCHEME HELPERS
 # ============================================================================
 
-def _open_url(url: str) -> Tuple[bool, str]:
+def _open_url(url: str) -> tuple[bool, str]:
     """Open a URL scheme on macOS. Returns (success, message)."""
     try:
         result = subprocess.run(
@@ -193,7 +193,7 @@ class AddMultipleTasksInput(BaseModel):
     """Input for adding multiple tasks."""
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    tasks: List[str] = Field(
+    tasks: list[str] = Field(
         ...,
         description="List of task titles",
         min_length=1,
