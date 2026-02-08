@@ -2,21 +2,6 @@
 
 An MCP (Model Context Protocol) server for the [2Do](https://www.2doapp.com) task management app. Provides **write-only** access to 2Do via URL schemes (x-callback-url).
 
-## Features
-
-| Tool | Description |
-|------|-------------|
-| `twodo_add_task` | Create a task with full options (priority, due date, tags, etc.) |
-| `twodo_add_multiple_tasks` | Create multiple tasks at once |
-| `twodo_paste_tasks` | Paste text as subtasks into a project |
-| `twodo_get_task_id` | Get a task's UID (requires knowing title + list) |
-| `twodo_show_list` | Navigate to a specific list |
-| `twodo_show_today` | Show Today view |
-| `twodo_show_starred` | Show Starred view |
-| `twodo_show_scheduled` | Show Scheduled view |
-| `twodo_show_all` | Show All Tasks view |
-| `twodo_search` | Open search in 2Do app |
-
 ## Requirements
 
 - **macOS** (uses `open` command for URL schemes)
@@ -26,70 +11,136 @@ An MCP (Model Context Protocol) server for the [2Do](https://www.2doapp.com) tas
 ## Installation
 
 ```bash
-cd ~/Claude/2do-mcp
+git clone https://github.com/ardiv/2do-mcp.git
+cd 2do-mcp
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
 ```
 
-## Claude Desktop Configuration
+## Setup for Claude Desktop
 
-Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+1. Open Claude Desktop settings (Claude > Settings > Developer > Edit Config)
+
+2. Add the following to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ```json
 {
   "mcpServers": {
     "twodo": {
-      "command": "/Users/YOUR_USER/Claude/2do-mcp/.venv/bin/python",
+      "command": "/ABSOLUTE/PATH/TO/2do-mcp/.venv/bin/python",
       "args": ["-m", "twodo_mcp.server"],
-      "cwd": "/Users/YOUR_USER/Claude/2do-mcp"
+      "cwd": "/ABSOLUTE/PATH/TO/2do-mcp"
     }
   }
 }
 ```
 
-Replace `YOUR_USER` with your macOS username.
+3. Replace `/ABSOLUTE/PATH/TO/2do-mcp` with the actual path where you cloned the repo (e.g. `/Users/john/2do-mcp`)
+
+4. Restart Claude Desktop
+
+5. You should see "twodo" in the MCP servers list (hammer icon at the bottom of the chat)
+
+## Setup for Claude Code
+
+**Option A: Project-level** (recommended for per-project use)
+
+Create a `.mcp.json` file in your project root:
+
+```json
+{
+  "mcpServers": {
+    "twodo": {
+      "command": "/ABSOLUTE/PATH/TO/2do-mcp/.venv/bin/python",
+      "args": ["-m", "twodo_mcp.server"],
+      "cwd": "/ABSOLUTE/PATH/TO/2do-mcp"
+    }
+  }
+}
+```
+
+**Option B: Global** (available in all projects)
+
+Run this in your terminal:
+
+```bash
+claude mcp add twodo \
+  /ABSOLUTE/PATH/TO/2do-mcp/.venv/bin/python \
+  -a "-m" -a "twodo_mcp.server" \
+  --scope user
+```
+
+Replace `/ABSOLUTE/PATH/TO/2do-mcp` with the actual path.
+
+**Verify it works:**
+
+```bash
+claude mcp list
+```
+
+You should see `twodo` in the output.
+
+## Tools
+
+| Tool | Description |
+|------|-------------|
+| `twodo_add_task` | Create a task with full options (priority, due date, tags, etc.) |
+| `twodo_add_multiple_tasks` | Create multiple tasks at once (with progress reporting) |
+| `twodo_paste_tasks` | Paste text as subtasks into a project |
+| `twodo_get_task_id` | Get a task's UID (requires knowing title + list) |
+| `twodo_show_list` | Navigate to a specific list |
+| `twodo_show_today` | Show Today view |
+| `twodo_show_starred` | Show Starred view |
+| `twodo_show_scheduled` | Show Scheduled view |
+| `twodo_show_all` | Show All Tasks view |
+| `twodo_search` | Open search in 2Do app |
 
 ## Usage Examples
 
 **Create a task:**
 ```
 "Add a task to buy milk tomorrow in the Shopping list"
-→ twodo_add_task(task="Buy milk", for_list="Shopping", due="1")
+-> twodo_add_task(task="Buy milk", for_list="Shopping", due="1")
 ```
 
 **Create multiple tasks:**
 ```
 "Add to Shopping: milk, bread, eggs"
-→ twodo_add_multiple_tasks(tasks=["Milk", "Bread", "Eggs"], for_list="Shopping")
+-> twodo_add_multiple_tasks(tasks=["Milk", "Bread", "Eggs"], for_list="Shopping")
 ```
 
 **High priority task:**
 ```
 "Add urgent task: call client"
-→ twodo_add_task(task="Call client", priority="3", starred=True)
+-> twodo_add_task(task="Call client", priority="3", starred=True)
 ```
 
 **Show today's tasks:**
 ```
 "Show my tasks for today"
-→ twodo_show_today()
+-> twodo_show_today()
+```
+
+## Testing
+
+```bash
+source .venv/bin/activate
+pip install -e ".[dev]"
+pytest tests/ -v
+```
+
+To interactively test with the MCP Inspector:
+
+```bash
+npx @modelcontextprotocol/inspector .venv/bin/python -- -m twodo_mcp.server
 ```
 
 ## Limitations
 
 - **Write-only**: No read API available. Cannot list or query existing tasks.
 - **macOS only**: Requires `open` command for URL schemes.
-- **No delete/update**: 2Do URL schemes only support creating tasks.
-
-## Development
-
-```bash
-source .venv/bin/activate
-python -m twodo_mcp.server          # Run server
-python -m py_compile src/twodo_mcp/server.py  # Verify syntax
-pip install -e ".[dev]"             # Install with dev dependencies
-```
+- **No delete/update**: 2Do URL schemes only support creating tasks and navigating views.
 
 ## Resources
 
