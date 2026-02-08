@@ -10,11 +10,11 @@ Requires macOS with 2Do app installed.
 """
 
 import asyncio
-import json
 from enum import Enum
+from typing import TypedDict
 from urllib.parse import quote
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 from pydantic import BaseModel, ConfigDict, Field
 
 # Initialize the MCP server
@@ -54,6 +54,75 @@ class RepeatInterval(str, Enum):
     WEEKLY = "2"
     BI_WEEKLY = "3"
     MONTHLY = "4"
+
+
+# ============================================================================
+# STRUCTURED OUTPUT TYPES
+# ============================================================================
+
+class TaskResult(TypedDict):
+    """Result from creating a single task."""
+    success: bool
+    task: str
+    list: str
+    uid: str | None
+
+
+class BatchItemResult(TypedDict):
+    """Result for one task in a batch operation."""
+    task: str
+    success: bool
+    error: str | None
+
+
+class BatchResult(TypedDict):
+    """Result from creating multiple tasks."""
+    success: bool
+    total: int
+    successful: int
+    failed: int
+    results: list[BatchItemResult]
+
+
+class PasteResult(TypedDict):
+    """Result from pasting tasks into a project."""
+    success: bool
+    project: str
+    list: str
+    tasks_added: int
+
+
+class TaskIDResult(TypedDict):
+    """Result from looking up a task UID."""
+    success: bool
+    task: str
+    list: str
+    uid: str | None
+
+
+class ViewResult(TypedDict):
+    """Result from navigating to a view."""
+    success: bool
+    view: str
+
+
+class ListResult(TypedDict):
+    """Result from navigating to a list."""
+    success: bool
+    list: str
+
+
+class SearchResult(TypedDict):
+    """Result from opening a search."""
+    success: bool
+    query: str
+    note: str
+
+
+class ErrorResult(TypedDict):
+    """Error response."""
+    success: bool
+    error: str
 
 
 # ============================================================================
@@ -110,16 +179,6 @@ async def _read_task_uid() -> str | None:
     if clip and len(clip) == TASK_UID_LENGTH:
         return clip
     return None
-
-
-def _error_response(message: str) -> str:
-    """Format a consistent error JSON response."""
-    return json.dumps({"success": False, "error": message}, indent=2)
-
-
-def _success_response(**fields: object) -> str:
-    """Format a consistent success JSON response."""
-    return json.dumps({"success": True, **fields}, indent=2)
 
 
 # ============================================================================
@@ -196,6 +255,10 @@ class AddTaskInput(BaseModel):
         default=None,
         description="Parent task UID (32-char string) to nest under",
     )
+    locations: str | None = Field(
+        default=None,
+        description="Comma-separated location names for geofence alerts",
+    )
     ignore_defaults: bool = Field(
         default=False,
         description="Ignore 2Do's default due date/time settings for new tasks",
@@ -203,6 +266,10 @@ class AddTaskInput(BaseModel):
     save_in_clipboard: bool = Field(
         default=True,
         description="Save the new task's UID to clipboard after creation",
+    )
+    edit: bool = Field(
+        default=False,
+        description="Show the task edit screen in 2Do after creation",
     )
 
 
@@ -318,8 +385,10 @@ def _build_add_url(params: AddTaskInput) -> str:
         ("action", params.action, "quote"),
         ("forParentName", params.for_parent_name, "quote"),
         ("forParentTask", params.for_parent_task, "quote"),
+        ("locations", params.locations, "quote"),
         ("ignoreDefaults", "1" if params.ignore_defaults else None, "raw"),
         ("saveInClipboard", "1" if params.save_in_clipboard else None, "raw"),
+        ("edit", "1" if params.edit else None, "raw"),
     ]
 
     for key, val, mode in field_map:
@@ -349,7 +418,7 @@ def _build_add_url(params: AddTaskInput) -> str:
         "openWorldHint": False,
     },
 )
-async def twodo_add_task(params: AddTaskInput) -> str:
+async def twodo_add_task(params: AddTaskInput) -> TaskResult | ErrorResult:
     """Create a new task in the 2Do app.
 
     Creates a task, project, or checklist via macOS URL scheme. The new task's
@@ -372,21 +441,24 @@ async def twodo_add_task(params: AddTaskInput) -> str:
             - action (str|None): Action URL
             - for_parent_name (str|None): Parent project name
             - for_parent_task (str|None): Parent task UID
+            - locations (str|None): Geofence location names
             - ignore_defaults (bool): Skip 2Do default date settings
             - save_in_clipboard (bool): Save UID to clipboard
+            - edit (bool): Show edit screen after creation
 
     Returns:
-        str: JSON with {success, task, list, uid} on success,
-             or {success: false, error} on failure.
+        TaskResult on success with {success, task, list, uid},
+        or ErrorResult on failure with {success: false, error}.
     """
     url = _build_add_url(params)
     success, message = await _open_url(url)
 
     if not success:
-        return _error_response(message)
+        return ErrorResult(success=False, error=message)
 
     uid = await _read_task_uid() if params.save_in_clipboard else None
-    return _success_response(
+    return TaskResult(
+        success=True,
         task=params.task,
         list=params.for_list or "(default)",
         uid=uid,
@@ -403,11 +475,14 @@ async def twodo_add_task(params: AddTaskInput) -> str:
         "openWorldHint": False,
     },
 )
-async def twodo_add_multiple_tasks(params: AddMultipleTasksInput) -> str:
+async def twodo_add_multiple_tasks(
+    params: AddMultipleTasksInput,
+    ctx: Context,
+) -> BatchResult:
     """Create multiple tasks in 2Do with shared settings.
 
     Each task is created sequentially with a short delay between them
-    to avoid overwhelming the app.
+    to avoid overwhelming the app. Reports progress to the client.
 
     Args:
         params (AddMultipleTasksInput): Validated input containing:
@@ -416,14 +491,17 @@ async def twodo_add_multiple_tasks(params: AddMultipleTasksInput) -> str:
             - priority (Priority): Shared priority level
             - tags (str|None): Shared comma-separated tags
             - due (str|None): Shared due date
+        ctx (Context): MCP context for progress reporting.
 
     Returns:
-        str: JSON with {success, total, successful, failed, results[]}.
-             Each result has {task, success, error}.
+        BatchResult with {success, total, successful, failed, results[]}.
     """
-    results = []
+    results: list[BatchItemResult] = []
+    total = len(params.tasks)
 
-    for task_title in params.tasks:
+    for i, task_title in enumerate(params.tasks):
+        await ctx.report_progress(i, total)
+
         task_input = AddTaskInput(
             task=task_title,
             for_list=params.for_list,
@@ -434,19 +512,18 @@ async def twodo_add_multiple_tasks(params: AddMultipleTasksInput) -> str:
         )
         url = _build_add_url(task_input)
         ok, msg = await _open_url(url)
-        results.append({"task": task_title, "success": ok, "error": None if ok else msg})
+        results.append(BatchItemResult(task=task_title, success=ok, error=None if ok else msg))
         await asyncio.sleep(BATCH_DELAY_SECONDS)
 
+    await ctx.report_progress(total, total)
+
     successful = sum(1 for r in results if r["success"])
-    return json.dumps(
-        {
-            "success": successful == len(params.tasks),
-            "total": len(params.tasks),
-            "successful": successful,
-            "failed": len(params.tasks) - successful,
-            "results": results,
-        },
-        indent=2,
+    return BatchResult(
+        success=successful == total,
+        total=total,
+        successful=successful,
+        failed=total - successful,
+        results=results,
     )
 
 
@@ -460,7 +537,7 @@ async def twodo_add_multiple_tasks(params: AddMultipleTasksInput) -> str:
         "openWorldHint": False,
     },
 )
-async def twodo_paste_tasks(params: PasteTasksInput) -> str:
+async def twodo_paste_tasks(params: PasteTasksInput) -> PasteResult | ErrorResult:
     """Paste multiline text as subtasks into an existing project.
 
     Each non-empty line in the text becomes a separate subtask
@@ -473,8 +550,8 @@ async def twodo_paste_tasks(params: PasteTasksInput) -> str:
             - for_list (str): List containing the project
 
     Returns:
-        str: JSON with {success, project, list, tasks_added}
-             or {success: false, error}.
+        PasteResult on success with {success, project, list, tasks_added},
+        or ErrorResult on failure.
     """
     url = (
         f"{TWODO_BASE_URL}/paste?"
@@ -485,10 +562,11 @@ async def twodo_paste_tasks(params: PasteTasksInput) -> str:
     ok, msg = await _open_url(url)
 
     if not ok:
-        return _error_response(msg)
+        return ErrorResult(success=False, error=msg)
 
     task_count = len([line for line in params.text.split("\n") if line.strip()])
-    return _success_response(
+    return PasteResult(
+        success=True,
         project=params.in_project,
         list=params.for_list,
         tasks_added=task_count,
@@ -505,7 +583,7 @@ async def twodo_paste_tasks(params: PasteTasksInput) -> str:
         "openWorldHint": False,
     },
 )
-async def twodo_get_task_id(params: GetTaskIDInput) -> str:
+async def twodo_get_task_id(params: GetTaskIDInput) -> TaskIDResult | ErrorResult:
     """Get the unique identifier (UID) of an existing task.
 
     Looks up the task by exact title and list name. The 32-character UID
@@ -518,8 +596,8 @@ async def twodo_get_task_id(params: GetTaskIDInput) -> str:
             - for_list (str): List containing the task
 
     Returns:
-        str: JSON with {success, task, list, uid} where uid is 32 chars,
-             or {success: false, error}.
+        TaskIDResult on success with {success, task, list, uid},
+        or ErrorResult on failure.
     """
     url = (
         f"{TWODO_BASE_URL}/getTaskID?"
@@ -530,15 +608,18 @@ async def twodo_get_task_id(params: GetTaskIDInput) -> str:
     ok, msg = await _open_url(url)
 
     if not ok:
-        return _error_response(msg)
+        return ErrorResult(success=False, error=msg)
 
     uid = await _read_task_uid()
     if not uid:
-        return _error_response(
-            f"Task '{params.task}' not found in list '{params.for_list}'. "
-            "Check that the title matches exactly (case-sensitive)."
+        return ErrorResult(
+            success=False,
+            error=(
+                f"Task '{params.task}' not found in list '{params.for_list}'. "
+                "Check that the title matches exactly (case-sensitive)."
+            ),
         )
-    return _success_response(task=params.task, list=params.for_list, uid=uid)
+    return TaskIDResult(success=True, task=params.task, list=params.for_list, uid=uid)
 
 
 @mcp.tool(
@@ -551,7 +632,7 @@ async def twodo_get_task_id(params: GetTaskIDInput) -> str:
         "openWorldHint": False,
     },
 )
-async def twodo_show_list(params: ShowListInput) -> str:
+async def twodo_show_list(params: ShowListInput) -> ListResult | ErrorResult:
     """Navigate to a specific list in the 2Do app.
 
     Opens the 2Do app and switches to the named list.
@@ -561,13 +642,13 @@ async def twodo_show_list(params: ShowListInput) -> str:
             - name (str): List name to navigate to
 
     Returns:
-        str: JSON with {success, list} or {success: false, error}.
+        ListResult on success, or ErrorResult on failure.
     """
     url = f"{TWODO_BASE_URL}/showList?name={quote(params.name)}"
     ok, msg = await _open_url(url)
     if not ok:
-        return _error_response(msg)
-    return _success_response(list=params.name)
+        return ErrorResult(success=False, error=msg)
+    return ListResult(success=True, list=params.name)
 
 
 @mcp.tool(
@@ -580,16 +661,16 @@ async def twodo_show_list(params: ShowListInput) -> str:
         "openWorldHint": False,
     },
 )
-async def twodo_show_today() -> str:
+async def twodo_show_today() -> ViewResult | ErrorResult:
     """Navigate to the Today view in the 2Do app.
 
     Returns:
-        str: JSON with {success, view: "Today"} or {success: false, error}.
+        ViewResult on success, or ErrorResult on failure.
     """
     ok, msg = await _open_url(f"{TWODO_BASE_URL}/showToday")
     if not ok:
-        return _error_response(msg)
-    return _success_response(view="Today")
+        return ErrorResult(success=False, error=msg)
+    return ViewResult(success=True, view="Today")
 
 
 @mcp.tool(
@@ -602,16 +683,16 @@ async def twodo_show_today() -> str:
         "openWorldHint": False,
     },
 )
-async def twodo_show_starred() -> str:
+async def twodo_show_starred() -> ViewResult | ErrorResult:
     """Navigate to the Starred view in the 2Do app.
 
     Returns:
-        str: JSON with {success, view: "Starred"} or {success: false, error}.
+        ViewResult on success, or ErrorResult on failure.
     """
     ok, msg = await _open_url(f"{TWODO_BASE_URL}/showStarred")
     if not ok:
-        return _error_response(msg)
-    return _success_response(view="Starred")
+        return ErrorResult(success=False, error=msg)
+    return ViewResult(success=True, view="Starred")
 
 
 @mcp.tool(
@@ -624,16 +705,16 @@ async def twodo_show_starred() -> str:
         "openWorldHint": False,
     },
 )
-async def twodo_show_scheduled() -> str:
+async def twodo_show_scheduled() -> ViewResult | ErrorResult:
     """Navigate to the Scheduled view in the 2Do app.
 
     Returns:
-        str: JSON with {success, view: "Scheduled"} or {success: false, error}.
+        ViewResult on success, or ErrorResult on failure.
     """
     ok, msg = await _open_url(f"{TWODO_BASE_URL}/showScheduled")
     if not ok:
-        return _error_response(msg)
-    return _success_response(view="Scheduled")
+        return ErrorResult(success=False, error=msg)
+    return ViewResult(success=True, view="Scheduled")
 
 
 @mcp.tool(
@@ -646,16 +727,16 @@ async def twodo_show_scheduled() -> str:
         "openWorldHint": False,
     },
 )
-async def twodo_show_all() -> str:
+async def twodo_show_all() -> ViewResult | ErrorResult:
     """Navigate to the All Tasks view in the 2Do app.
 
     Returns:
-        str: JSON with {success, view: "All"} or {success: false, error}.
+        ViewResult on success, or ErrorResult on failure.
     """
     ok, msg = await _open_url(f"{TWODO_BASE_URL}/showAll")
     if not ok:
-        return _error_response(msg)
-    return _success_response(view="All")
+        return ErrorResult(success=False, error=msg)
+    return ViewResult(success=True, view="All")
 
 
 @mcp.tool(
@@ -668,7 +749,7 @@ async def twodo_show_all() -> str:
         "openWorldHint": False,
     },
 )
-async def twodo_search(params: SearchInput) -> str:
+async def twodo_search(params: SearchInput) -> SearchResult | ErrorResult:
     """Open 2Do with a search query.
 
     Results are displayed in the 2Do app window. Supports special search
@@ -680,15 +761,16 @@ async def twodo_search(params: SearchInput) -> str:
               'tags:tagname', '(clipboard)' to search clipboard contents.
 
     Returns:
-        str: JSON with {success, query, note} or {success: false, error}.
-             Note: results are shown in the 2Do app, not returned here.
+        SearchResult on success (results shown in app, not returned here),
+        or ErrorResult on failure.
     """
     url = f"{TWODO_BASE_URL}/search?text={quote(params.text)}"
     ok, msg = await _open_url(url)
 
     if not ok:
-        return _error_response(msg)
-    return _success_response(
+        return ErrorResult(success=False, error=msg)
+    return SearchResult(
+        success=True,
         query=params.text,
         note="Results displayed in 2Do app",
     )

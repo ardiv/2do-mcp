@@ -1,0 +1,60 @@
+<evaluation>
+  <!--
+    2Do MCP Server Evaluations
+
+    Note: 2Do is write-only (no read API). These evaluations test whether an LLM
+    can correctly select tools and construct parameters for realistic task management
+    scenarios. All questions are about tool selection and parameter construction,
+    not about reading data back from 2Do.
+  -->
+
+  <qa_pair>
+    <question>Using the twodo MCP server, what is the correct tool name to create a single task in the 2Do app?</question>
+    <answer>twodo_add_task</answer>
+  </qa_pair>
+
+  <qa_pair>
+    <question>If I want to create a high-priority starred task called "Q1 Review" in the "Work" list with a due date of 2026-03-15, what priority value should I pass to twodo_add_task?</question>
+    <answer>3</answer>
+  </qa_pair>
+
+  <qa_pair>
+    <question>Using the twodo MCP server, what task_type value should I use to create a project (not a regular task or checklist)?</question>
+    <answer>1</answer>
+  </qa_pair>
+
+  <qa_pair>
+    <question>I want to create 10 grocery items as tasks in my "Shopping" list using the twodo MCP server. What is the most efficient single tool to use?</question>
+    <answer>twodo_add_multiple_tasks</answer>
+  </qa_pair>
+
+  <qa_pair>
+    <question>I have a project called "Sprint 5" in my "Dev" list and I want to add subtasks from a text file with one task per line. Which twodo MCP tool should I use?</question>
+    <answer>twodo_paste_tasks</answer>
+  </qa_pair>
+
+  <qa_pair>
+    <question>I need to add a subtask under an existing project, but I need the project's UID first. Which twodo MCP tool retrieves a task's unique identifier?</question>
+    <answer>twodo_get_task_id</answer>
+  </qa_pair>
+
+  <qa_pair>
+    <question>How many characters long is the task UID returned by twodo_get_task_id?</question>
+    <answer>32</answer>
+  </qa_pair>
+
+  <qa_pair>
+    <question>Using the twodo MCP server, what repeat interval value creates a weekly recurring task?</question>
+    <answer>2</answer>
+  </qa_pair>
+
+  <qa_pair>
+    <question>I want to find all overdue tasks in 2Do. Which twodo MCP tool should I use, and what special search syntax shows overdue tasks?</question>
+    <answer>twodo_search with type:overdue</answer>
+  </qa_pair>
+
+  <qa_pair>
+    <question>Can the twodo MCP server mark an existing task as complete or delete a task? Answer yes or no.</question>
+    <answer>no</answer>
+  </qa_pair>
+</evaluation>
